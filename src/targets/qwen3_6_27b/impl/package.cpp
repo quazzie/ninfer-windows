@@ -6,8 +6,11 @@
 #include "targets/qwen3_6_27b/impl/load/bindings.h"
 #include "targets/qwen3_6_27b/impl/variant.h"
 
+#include <cstdint>
 #include <stdexcept>
 #include <utility>
+#include <variant>
+#include <vector>
 
 namespace ninfer::targets::qwen3_6_27b::detail {
 
@@ -72,6 +75,27 @@ constexpr ModelSamplingDefaults kQwen3_8Defaults{
                      .frequency_penalty = 0.0F},
 };
 
+bool tensor_matches(const artifact::Reader& reader, std::string_view name,
+                    artifact::NumericFormat format, artifact::StorageLayout layout,
+                    std::vector<std::uint64_t> shape) {
+    const auto* object = reader.find(name);
+    if (object == nullptr) { return false; }
+    const auto* tensor = std::get_if<artifact::TensorDescriptor>(object);
+    return tensor != nullptr && tensor->format == format && tensor->layout == layout &&
+           tensor->shape == shape;
+}
+
+bool endpoint_matches(const artifact::Reader& reader, std::string_view name,
+                      artifact::NumericFormat format, artifact::StorageLayout layout) {
+    return tensor_matches(reader, name, format, layout, {248320, 5120});
+}
+
+bool nvfp4_parent_matches(const artifact::Reader& reader, std::string_view name,
+                          std::vector<std::uint64_t> shape) {
+    return tensor_matches(reader, name, artifact::NumericFormat::NVFP4,
+                          artifact::StorageLayout::BlockScaleK16M128x4V1, std::move(shape));
+}
+
 } // namespace
 
 ModelSamplingDefaults Package::sampling_defaults(std::string_view model) {
@@ -100,6 +124,30 @@ Package::WeightsProfile Package::resolve_weights(const artifact::ArtifactIdentit
     }
     throw std::runtime_error("artifact identity '" + identity.model_id + "/" + identity.weights_id +
                              "' is not supported by target '" + std::string(target_key) + "'");
+}
+
+Package::WeightsProfile Package::resolve_weights(const artifact::Reader& reader) {
+    const auto& identity = reader.identity();
+    if (identity.model_id == qwen3_8_model_id &&
+        (identity.weights_id == "nvfp4" || identity.weights_id == "nvfp4full")) {
+        const bool w8_endpoints =
+            endpoint_matches(reader, "text/token_embedding", artifact::NumericFormat::W8G32_F16S,
+                             artifact::StorageLayout::RowSplitK128V1) &&
+            endpoint_matches(reader, "text/output_head", artifact::NumericFormat::W8G32_F16S,
+                             artifact::StorageLayout::RowSplitK128V1);
+
+        // QUASAR's Text backbone is all-NVFP4. Check both full-attention and GDN boundaries so a
+        // future W8-endpoint mixed profile cannot be misclassified from one sentinel alone.
+        const bool quasar_text =
+            nvfp4_parent_matches(reader, "text/layers/3/attention/query_key_gate_value",
+                                 {14336, 5120}) &&
+            nvfp4_parent_matches(reader, "text/layers/3/attention/output", {5120, 6144}) &&
+            nvfp4_parent_matches(reader, "text/layers/0/gdn/query_key_value_z", {16384, 5120}) &&
+            nvfp4_parent_matches(reader, "text/layers/0/gdn/output", {5120, 6144});
+
+        if (w8_endpoints && quasar_text) { return WeightsProfile::Qwen38Nvfp4Quasar; }
+    }
+    return resolve_weights(identity);
 }
 
 Package::LoadPlan Package::plan_load(artifact::Binder& binder, const EngineOptions& options,

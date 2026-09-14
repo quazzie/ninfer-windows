@@ -39,6 +39,7 @@ NumericFormat endpoint_format(WeightsProfile weights_profile) {
     case WeightsProfile::Qwen38GroupwiseInt:
     case WeightsProfile::Qwen36Nvfp4:
     case WeightsProfile::Qwen38Nvfp4Full:
+    case WeightsProfile::Qwen38Nvfp4Quasar:
         return NumericFormat::W8G32_F16S;
     case WeightsProfile::Qwen38Nvfp4:
         return NumericFormat::FP8_E4M3FN_ROW_BF16S;
@@ -392,8 +393,8 @@ void bind_qwen38_nvfp4_text_layers(artifact::Binder& binder, BindingPlan& out) {
 }
 
 // The fuller Qwen3.8 NVFP4 allocation: the Qwen3.6 NVFP4 exception pattern with
-// this target's fused GDN control parent.
-void bind_qwen38_nvfp4full_text_layers(artifact::Binder& binder, BindingPlan& out) {
+// this target's fused GDN control parent. QUASAR removes the BF16 Text exceptions.
+void bind_qwen38_nvfp4full_text_layers(artifact::Binder& binder, BindingPlan& out, bool all_nvfp4) {
     for (std::size_t layer = 0; layer < kTextLayers; ++layer) {
         TextLayerPlan& target    = out.text_layers[layer];
         const std::string prefix = "text/layers/" + std::to_string(layer) + "/";
@@ -402,7 +403,7 @@ void bind_qwen38_nvfp4full_text_layers(artifact::Binder& binder, BindingPlan& ou
         target.is_full_attention = is_full_layer(layer);
         if (target.is_full_attention) {
             WeightPlan input;
-            if (is_early_attention_input(layer)) {
+            if (!all_nvfp4 && is_early_attention_input(layer)) {
                 input = bind_weight(binder, prefix + "attention/query_key_gate_value",
                                     NumericFormat::BF16, {14336, 5120});
             } else {
@@ -416,7 +417,7 @@ void bind_qwen38_nvfp4full_text_layers(artifact::Binder& binder, BindingPlan& ou
                 binder, prefix + "attention/query_norm", NumericFormat::BF16, {256});
             target.attention.key_norm = artifact::bind_device_tensor(
                 binder, prefix + "attention/key_norm", NumericFormat::BF16, {256});
-            if (is_bf16_attention_output(layer)) {
+            if (!all_nvfp4 && is_bf16_attention_output(layer)) {
                 target.attention.output = bind_weight(binder, prefix + "attention/output",
                                                       NumericFormat::BF16, {5120, 6144});
             } else {
@@ -442,7 +443,7 @@ void bind_qwen38_nvfp4full_text_layers(artifact::Binder& binder, BindingPlan& ou
             };
             target.gdn.norm = artifact::bind_device_tensor(binder, prefix + "gdn/norm",
                                                            NumericFormat::BF16, {128});
-            if (is_bf16_gdn_output(layer)) {
+            if (!all_nvfp4 && is_bf16_gdn_output(layer)) {
                 target.gdn.output =
                     bind_weight(binder, prefix + "gdn/output", NumericFormat::BF16, {5120, 6144});
             } else {
@@ -553,7 +554,10 @@ ArtifactLoadPlan bind_artifact(artifact::Binder& binder, WeightsProfile weights_
         bind_qwen38_nvfp4_text_layers(binder, out);
         break;
     case WeightsProfile::Qwen38Nvfp4Full:
-        bind_qwen38_nvfp4full_text_layers(binder, out);
+        bind_qwen38_nvfp4full_text_layers(binder, out, false);
+        break;
+    case WeightsProfile::Qwen38Nvfp4Quasar:
+        bind_qwen38_nvfp4full_text_layers(binder, out, true);
         break;
     default:
         throw std::invalid_argument("qwen3_6_27b: invalid weights profile");

@@ -16,6 +16,7 @@ struct DeviceContext;
 namespace artifact {
 class Binder;
 class MaterializedArtifact;
+class Reader;
 struct ArtifactIdentity;
 struct MaterializationPlan;
 } // namespace artifact
@@ -34,6 +35,7 @@ enum class WeightsProfile : std::uint8_t {
     Qwen36Nvfp4,
     Qwen38Nvfp4,
     Qwen38Nvfp4Full,
+    Qwen38Nvfp4Quasar,
 };
 
 using Frontend        = qwen3_6::Frontend;
@@ -125,6 +127,7 @@ struct Package {
 
     [[nodiscard]] static ModelSamplingDefaults sampling_defaults(std::string_view model);
     [[nodiscard]] static WeightsProfile resolve_weights(const artifact::ArtifactIdentity& identity);
+    [[nodiscard]] static WeightsProfile resolve_weights(const artifact::Reader& reader);
     [[nodiscard]] static LoadPlan plan_load(artifact::Binder& binder, const EngineOptions& options,
                                             WeightsProfile weights_profile);
     [[nodiscard]] static std::unique_ptr<LoadedModel>

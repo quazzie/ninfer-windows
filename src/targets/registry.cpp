@@ -90,7 +90,13 @@ ConstructedTarget construct_registered(const EngineOptions& options, DeviceConte
                                        std::string_view target_key) {
     StartupPhaseScope target_plan_phase(options.startup_observer, StartupPhase::TargetPlan);
     const auto& identity                          = reader.identity();
-    const auto weights_profile                    = Target::resolve_weights(identity);
+    const auto weights_profile                    = [&] {
+        if constexpr (requires { Target::resolve_weights(reader); }) {
+            return Target::resolve_weights(reader);
+        } else {
+            return Target::resolve_weights(identity);
+        }
+    }();
     const ModelSamplingDefaults sampling_defaults = Target::sampling_defaults(identity.model_id);
     const runtime::ContextCostIdentity context_cost_identity{
         .hardware_class = runtime::context_cost_hardware_class(
